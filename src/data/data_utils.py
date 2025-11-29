@@ -1,11 +1,7 @@
-import os
 import random
 import torch
 import skimage.color as sc
-import torch.optim as optim
-import torch.optim.lr_scheduler as lrs
 import numpy as np
-
 
 
 def tensor2np(*args, rgb_range=255):
@@ -62,7 +58,6 @@ def set_channel(*args, n_channels=3):
         return img
 
     return [_set_channel(a) for a in args]
-
 
 
 def augment(*args, hflip=True, rot=True):

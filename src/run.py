@@ -1,12 +1,14 @@
 import os
 
 from utils import load_config, get_logger, set_seed
+from data import Data
+from models import Model
+from runner import Trainer
 
 def init_dir(config):
     save_dir = os.path.join(config.save_dir, config.exp_name)
     os.makedirs(save_dir, exist_ok=True)
     return save_dir
-
 
 def main(args):
     config = load_config(args.config_path)
@@ -16,10 +18,10 @@ def main(args):
         log_dir=save_dir,
     )
     set_seed(config.manual_seed)
-    model = model_cls(config.model.params).to(config.device)
-    trainer = SRTrainer(config, model, logger, save_dir)
+    data = Data(config)
+    model = Model(config, logger)
+    trainer = Trainer(config, model, data, logger, save_dir)
     trainer.run()
-
 
 if __name__ == "main":
     import argparse

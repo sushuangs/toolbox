@@ -25,7 +25,6 @@ class Model(nn.Module):
                 self.device = torch.device('cpu')
 
         self.n_GPUs = args.n_GPUs
-        self.save_models = args.save_models
 
         module = import_module('models.' + args.model.lower())
         self.model = module.make_model(args).to(self.device)

@@ -1,0 +1,79 @@
+exp_name: EDSR_x2_DIV2K_L1
+manual_seed: 10
+
+n_GPUs: 1
+scale: 2
+
+total_iter: 200
+val_freq: 5
+recoder_freq: 5
+
+test_only: false
+
+n_colors: 3
+
+dir_data: ../dataset
+
+data_train: 'DIV2K'
+data_range: '1-800/801-810'
+
+data_test: ['Set5', 'Set14', 'B100', 'Urban100']
+
+ext: exp
+
+patch_size: 96
+
+num_worker: 6
+batch_size: 16
+
+no_augment: ~
+
+precision: 'single'
+
+# network structures
+network_g:
+  num_in_ch: 3
+  num_out_ch: 3
+  num_feat: 64
+  num_block: 16
+  upscale: 2
+  res_scale: 1
+  img_range: 255.
+  rgb_mean: [0.4488, 0.4371, 0.4040]
+
+# training settings
+optim_args:
+  type: Adam
+  lr: !!float 1e-4
+  weight_decay: 0
+  betas: [0.9, 0.99]
+
+  milestones: [200000]
+  gamma: 0.5
+
+  # losses
+losses:
+  - type: L1
+    loss_weight: 1.0
+
+metrics:
+  - name: psnr
+    type: calculate_psnr
+    crop_border: 2
+    better: higher
+
+  - name: ssim
+    type: calculate_ssim
+    crop_border: 2
+    better: higher
+
+  - name: niqe
+    type: calculate_niqe
+    crop_border: 2
+    better: lower
+
+  - name: lpips
+    type: calculate_lpips
+    crop_border: 2
+    better: lower
+
