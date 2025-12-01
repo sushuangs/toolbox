@@ -9,14 +9,13 @@ def load_config(config_path):
     
     with open(config_path, "r", encoding="utf-8") as f:
         try:
-            config_dict = yaml.safe_load(f)
+            config_dict = yaml.load(f, Loader=yaml.Loader)
         except yaml.YAMLError as e:
             raise yaml.YAMLError(f"YAML format error:{str(e)}") from e
     
     config = dict_to_namespace(config_dict)
     
     return config
-
 
 def dict_to_namespace(obj):
     if isinstance(obj, list):
@@ -28,7 +27,6 @@ def dict_to_namespace(obj):
         return namespace
     else:
         return obj
-
 
 def namespace_to_dict(obj):
     if isinstance(obj, SimpleNamespace):

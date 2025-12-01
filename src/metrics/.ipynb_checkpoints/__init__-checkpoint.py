@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from utils.utility import Tensor2np
+from utils.config import namespace_to_dict
 
 class Loss(nn.modules.loss._Loss):
     def __init__(self, args):
@@ -36,7 +37,11 @@ class Loss(nn.modules.loss._Loss):
                     args,
                     loss_type
                 )
-
+            elif loss_type.find('CML') >= 0:
+                module = import_module('metrics.complexity_loss')
+                loss_function = getattr(module, 'MultiClassLoss')(
+                    **namespace_to_dict(loss.params)
+                )
             self.loss.append({
                 'type': loss_type,
                 'weight': float(weight),
