@@ -38,4 +38,4 @@ desktop.ini
 *.bak
 .cache/
 
-./configs/*
+configs/*
