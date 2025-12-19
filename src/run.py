@@ -34,7 +34,7 @@ def main(args):
 
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument('--config', type=str, default='./configs/edsr/edsr_x2_DIV2K_CML_(0-7)_L1_0.065*L2.yaml')
+parser.add_argument('--config', type=str, default='./configs/edsr/edsr_x2_DIV2K_CML_(0-7)_L2+NormL1_(8,8)_(4,4)_quantile.yaml')
 parser.add_argument('--reset', action='store_true', default=False)
 args = parser.parse_args()
 main(args)

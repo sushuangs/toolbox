@@ -11,7 +11,7 @@ from utils.utility import Tensor2np
 from utils.config import namespace_to_dict
 
 class Loss(nn.modules.loss._Loss):
-    def __init__(self, args):
+    def __init__(self, args, writer):
         super(Loss, self).__init__()
         print('Preparing loss function:')
 
@@ -40,6 +40,7 @@ class Loss(nn.modules.loss._Loss):
             elif loss_type.find('CML') >= 0:
                 module = import_module('metrics.complexity_loss')
                 loss_function = getattr(module, 'MultiClassLoss')(
+                    writer,
                     **namespace_to_dict(loss.params)
                 )
             self.loss.append({
@@ -67,12 +68,12 @@ class Loss(nn.modules.loss._Loss):
                 self.loss_module, range(args.n_GPUs)
             )
 
-    def forward(self, sr, hr):
+    def forward(self, sr, hr, **args):
         losses = []
         metric_list = {}
         for i, l in enumerate(self.loss):
             if l['function'] is not None:
-                loss = l['function'](sr, hr)
+                loss = l['function'](sr, hr, **args)
                 effective_loss = l['weight'] * loss
                 metric_list[l['type']] = loss.item()
                 losses.append(effective_loss)
