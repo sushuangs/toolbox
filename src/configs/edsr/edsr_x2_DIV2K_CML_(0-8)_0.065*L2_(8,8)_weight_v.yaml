@@ -1,4 +1,4 @@
-exp_name: EDSR_x2_DIV2K_CML_(0-7)_L1_0.065*L2
+exp_name: EDSR_x2_DIV2K_CML_(0-8)_0.065*L2_(8,8)_weight_v
 model: EDSR
 manual_seed: 10
 
@@ -66,8 +66,8 @@ losses:
   - type: CML
     loss_weight: 1.0
     params:
-        win_size: !!python/tuple [12, 12]
-        stride: !!python/tuple [12, 12]
+        win_size: !!python/tuple [8, 8]
+        stride: !!python/tuple [8, 8]
 
 metrics:
   - name: psnr

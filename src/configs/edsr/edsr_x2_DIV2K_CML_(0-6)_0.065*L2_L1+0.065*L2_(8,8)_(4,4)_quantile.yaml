@@ -1,4 +1,4 @@
-exp_name: EDSR_x2_DIV2K_L1
+exp_name: EDSR_x2_DIV2K_CML_(0-6)_0.065*L2_L1+0.065*L2_(8,8)_(4,4)_quantile
 model: EDSR
 manual_seed: 10
 
@@ -63,8 +63,11 @@ optim_args:
 
   # losses
 losses:
-  - type: L1
+  - type: CML
     loss_weight: 1.0
+    params:
+        win_size: !!python/tuple [8, 8]
+        stride: !!python/tuple [4, 4]
 
 metrics:
   - name: psnr
