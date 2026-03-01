@@ -2,6 +2,7 @@
 import torch
 import numpy as np
 from tqdm import tqdm
+from torch.utils.tensorboard import SummaryWriter
 from utils import make_optimizer, ExperimentRecorder, get_bare_model, save_network, load_network, MetricStats
 from metrics import Loss, MetricCalculator
 
@@ -12,12 +13,13 @@ class Trainer:
         self.data = data
         self.save_dir = save_dir
         self.total_epoch = config.total_iter
+        self.writer = SummaryWriter(log_dir='/root/tf-logs')
         self.device = torch.device('cpu' if config.cpu else 'cuda')
         self.train_loader = data.loader_train
         self.test_loader = data.loader_test
         self.optimizer = make_optimizer(config.optim_args, self.model)
-        self.recorder = ExperimentRecorder(config.exp_name, config, logger, self.save_dir)
-        self.loss_fn = Loss(config)
+        self.recorder = ExperimentRecorder(config.exp_name, config, logger, self.writer, self.save_dir)
+        self.loss_fn = Loss(config, self.writer)
         self.metric_caculator = MetricCalculator(config.metrics)
         self.TMS = MetricStats()
         self.VMS = MetricStats()
@@ -37,11 +39,12 @@ class Trainer:
             leave=False
         )
         batch_losses = []
+        first_batch = True
         for batch_idx, batch in enumerate(train_pbar):
             lr, hr = batch[0].to(self.device), batch[1].to(self.device)
             self.optimizer.zero_grad()
             pred = self.model(lr)
-            loss, batch_metrics = self.loss_fn(pred, hr)
+            loss, batch_metrics = self.loss_fn(pred, hr, epoch=epoch, is_plot=first_batch)
             
             loss.backward()
             self.optimizer.step()
@@ -53,6 +56,7 @@ class Trainer:
                 "Batch Loss": f"{loss.item():.6f}",
                 "Avg Loss": f"{np.mean(batch_losses):.6f}"
             })
+            first_batch = False
 
         train_pbar.close()
 

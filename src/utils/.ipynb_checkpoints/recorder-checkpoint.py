@@ -15,6 +15,7 @@ class ExperimentRecorder:
         exp_name: str,
         config: Dict[str, Any],
         logger,
+        writer,
         save_dir: str = "./experiment/result"
     ):
         self.exp_name = exp_name
@@ -26,7 +27,7 @@ class ExperimentRecorder:
         self._init_img_path()
         self._init_results()
         
-        self.writer = SummaryWriter(log_dir='/root/tf-logs')
+        self.writer = writer
 
         if os.path.exists(self.file_path):
             self._load_existing_results()
@@ -193,12 +194,7 @@ class ExperimentRecorder:
                 )
             self.writer.add_scalar(
                 tag=f"metrics/{dataset_name}/{key}",
-                scalar_value=value,
-                global_step=index
-            )
-            self.writer.add_scalar(
-                tag=f"metrics/{dataset_name}/{key}_best",
-                scalar_value=best_info['val'],
+                scalar_value=round(value, 6),
                 global_step=index
             )
             self.writer.flush()
@@ -244,7 +240,7 @@ class ExperimentRecorder:
                 continue
             self.writer.add_scalar(
                 tag=f"loss/{key}",
-                scalar_value=value,
+                scalar_value=round(value, 6),
                 global_step=index
             )
 

@@ -2,144 +2,417 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import List, Dict, Callable, Tuple
+import numpy as np
+import math
+import matplotlib.pyplot as plt
+import warnings
+import json
 
 
 class MultiClassLoss(nn.Module):
     def __init__(
         self,
+        writer,
         win_size: Tuple[int, int] = (12, 12),
         stride: Tuple[int, int] = (12, 12),
         class_configs: List[Dict] = None,  
-        return_details: bool = False       
     ):
         super().__init__()
         self.win_size = win_size
         self.stride = stride
-        self.return_details = return_details
-        print(type(self.win_size))
+        self.writer = writer
+        self.global_step = 0
+        print(self.win_size, self.stride)
 
         default_configs = [
             {
-                "threshold_range": (0.0, 0.7),  
-                "losses": [F.l1_loss], 
-                "loss_weights": [1.0],          
-                "class_weight": 1.0                   
-            },
-            {
-                "threshold_range": (0.7, 1.0),
-                "losses": [F.mse_loss],
-                "loss_weights": [0.065],
-                "class_weight": 1.0
+                "losses": [self._l1_loss, self._multi_scale_block_loss], 
+                "loss_weights": [1.0, 1.0],                          
             }
         ]
         self.class_configs = class_configs if class_configs is not None else default_configs
         self.num_classes = len(self.class_configs)
+        
+        self._write_configs_to_tensorboard(default_configs)
+        
+        self.scales = [1, 2, 4, 8, 16]
 
+        self.scale_weights = self._get_weight(3.70, [1,2,4])
+        self.scale_kl_weight = self._get_weight(2.30, [1,2,4,8,16])
+        self.scale_tv_weight = self._get_weight(3.70, [1,2,4,8,16])
 
-    def _sliding_window_unfold(self, x: torch.Tensor):
+#         self.scale_cos_weight = self._get_weight(3.00, self.scales)
+        
+        print(self._get_weight(3.5, self.scales))
+
+#         self.scales = [1, 2, 4]
+#         self.scale_weights = [0.6, 0.3, 0.1]
+        
+        self.gauss_kernels = self._generate_multi_scale_gaussian_kernels()
+        
+        self.gray_weights = torch.tensor([0.299, 0.587, 0.114], dtype=torch.float32)
+        self.sobel_x_kernel = torch.tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]], dtype=torch.float32).view(1, 1, 3, 3)
+        self.sobel_y_kernel = torch.tensor([[-1., -2., -1.], [0., 0., 0.], [1., 2., 1.]], dtype=torch.float32).view(1, 1, 3, 3)
+
+    def _generate_multi_scale_gaussian_kernels(self):
+        gauss_kernels = {}
+        for scale in self.scales:
+            if scale == 1:
+                kernel_size = 3
+                sigma = 1.0
+                x = torch.linspace(-(kernel_size-1)/2, (kernel_size-1)/2, kernel_size)
+                y = torch.linspace(-(kernel_size-1)/2, (kernel_size-1)/2, kernel_size)
+                xx, yy = torch.meshgrid(x, y)
+                gauss = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))
+                gauss = gauss / gauss.sum()
+                kernel = gauss
+                kernel = kernel.unsqueeze(0).unsqueeze(0)
+            else:
+                kernel_size = 2 * scale + 1
+                sigma = scale / 2.0
+                x = torch.linspace(-(kernel_size-1)/2, (kernel_size-1)/2, kernel_size)
+                y = torch.linspace(-(kernel_size-1)/2, (kernel_size-1)/2, kernel_size)
+                xx, yy = torch.meshgrid(x, y)
+                gauss = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))
+                gauss = gauss / gauss.sum()
+                kernel = gauss
+                kernel = kernel.unsqueeze(0).unsqueeze(0)
+                kernel = kernel.repeat(3, 1, 1, 1)
+            gauss_kernels[scale] = kernel
+        return gauss_kernels
+
+    def _write_configs_to_tensorboard(self, configs):
+        if self.writer is None:
+            return
+        serializable_configs = []
+        
+        for cfg in configs:
+            serializable_cfg = cfg.copy()
+            if "losses" in serializable_cfg:
+                serializable_cfg["losses"] = [
+                    f"{loss.__name__}" if callable(loss) and hasattr(loss, "__name__")
+                    else f"{loss.__class__.__name__}(reduction={loss.reduction})"
+                    for loss in serializable_cfg["losses"]
+                ]
+            serializable_configs.append(serializable_cfg)
+        
+        configs_str = json.dumps(serializable_configs, indent=2)
+        
+        self.writer.add_text(
+            tag="LossConfig/DefaultConfigs",
+            text_string=configs_str,
+            global_step=self.global_step
+        )
+
+    def _sliding_window_unfold(self, x: torch.Tensor, h_win, w_win, h_stride, w_stride):
         B, C, H, W = x.shape
+        
+        if H <= h_win and W <= w_win:
+            x_blocks = x.unsqueeze(-1)
+            return x_blocks, 1
+
+        assert (H - h_win) % h_stride == 0, "Height not divisible by stride with window size"
+        assert (W - w_win) % w_stride == 0, "Width not divisible by stride with window size"
+
+        unfold = nn.Unfold(kernel_size=(h_win, w_win), stride=(h_stride, w_stride)).to(x.device)
+        x_unfold = unfold(x)  # (B, C*h_win*w_win, num_blocks)
+        
+        num_blocks = x_unfold.shape[2]
+
+        x_blocks = x_unfold.transpose(1, 2).reshape(B, num_blocks, C, h_win, w_win).permute(0, 2, 3, 4, 1)
+        
+        return x_blocks, num_blocks
+    
+    def _rgb2gray(self, x):
+        B, C, H, W = x.shape
+        if C == 3:
+            weights = self.gray_weights.to(x.device).type(x.dtype)
+        else:
+            weights = torch.ones(C, dtype=x.dtype, device=x.device) / C
+        gray = torch.sum(x * weights.view(1, C, 1, 1), dim=1, keepdim=True)
+        return gray
+
+    def _get_weight(self, k, scales):
+        weights_tmp = []
+        weights = []
+        for scale in range(0, len(scales)):
+            weight = math.exp(-k * scale / len(scales))
+            weights_tmp.append(weight)
+        for weight in weights_tmp:
+            weight = weight / sum(weights_tmp)
+            weights.append(weight)
+        return weights
+
+    def _tv_loss(self, pred, target, reduction="mean"):
+        tv_h = torch.mean(torch.abs(pred[..., 1:, :] - pred[..., :-1, :]))
+        tv_w = torch.mean(torch.abs(pred[..., :, 1:] - pred[..., :, :-1]))
+        return tv_h + tv_w
+    
+    def _add_pixel_noise(
+        self,
+        pred: torch.Tensor,
+        noise_amp: int = 2,
+    ) -> torch.Tensor:
+        device = pred.device
+        noise = torch.randn_like(pred) * (noise_amp / 3)
+        noise = torch.clamp(noise, -noise_amp, noise_amp)
+        pred_noisy = torch.clamp(pred + noise, 0.0, 255.0)
+        return pred_noisy
+
+    def _l1_loss(self, pred, target, reduction: str = "none"):
+#         pred_noisy = self._add_pixel_noise(pred)
+        loss = F.l1_loss(pred, target, reduction=reduction)
+
+        return loss
+
+    def _scale_loss(
+        self,
+        pred: torch.Tensor,
+        target: torch.Tensor,
+        reduction: str = "none",
+        pred_blurred: torch.Tensor = None,
+        target_blurred: torch.Tensor = None,
+    ) -> torch.Tensor:
+        eps = 1e-8
+        B, C, H, W = pred.shape
+        device = pred.device
+        dtype = pred.dtype
+
+        grad_x_kernel = self.sobel_x_kernel.to(device).type(dtype)
+        grad_y_kernel = self.sobel_y_kernel.to(device).type(dtype)
+        if C==1:            
+            pred_grad_x = F.conv2d(pred, grad_x_kernel, padding=1)
+            pred_grad_y = F.conv2d(pred, grad_y_kernel, padding=1)
+            target_grad_x = F.conv2d(target, grad_x_kernel, padding=1)
+            target_grad_y = F.conv2d(target, grad_y_kernel, padding=1)
+        else:
+            grad_x_kernel = grad_x_kernel.repeat(3, 1, 1, 1)
+            grad_y_kernel = grad_y_kernel.repeat(3, 1, 1, 1)
+            pred_grad_x = F.conv2d(pred, grad_x_kernel, padding=1, groups=3)
+            pred_grad_y = F.conv2d(pred, grad_y_kernel, padding=1, groups=3)
+            target_grad_x = F.conv2d(target, grad_x_kernel, padding=1, groups=3)
+            target_grad_y = F.conv2d(target, grad_y_kernel, padding=1, groups=3)
+
+        target_grad_amp = torch.sqrt(target_grad_x**2 + target_grad_y**2 + eps)
+#         pred_grad_amp = torch.sqrt(pred_grad_x**2 + pred_grad_y**2 + eps)
+
+        p = 1.0
+        target_grad_amp_exp = target_grad_amp ** p
+        target_grad_amp_sum = torch.sum(target_grad_amp_exp, dim=(2,3), keepdim=True)
+        target_grad_amp_weight = target_grad_amp_exp / target_grad_amp_sum
+        
+#         amp_loss = F.l1_loss(pred_grad_amp, target_grad_amp, reduction='none')
+
+        def cosine_dir_loss(pred_x, pred_y, target_x, target_y):
+            pred_vec = torch.cat([pred_x.unsqueeze(-1), pred_y.unsqueeze(-1)], dim=-1)
+            target_vec = torch.cat([target_x.unsqueeze(-1), target_y.unsqueeze(-1)], dim=-1)
+            pred_vec = F.normalize(pred_vec, p=2, dim=-1, eps=eps)
+            target_vec = F.normalize(target_vec, p=2, dim=-1, eps=eps)
+            cos_sim = torch.sum(pred_vec * target_vec, dim=-1)
+            dir_loss = 1 - cos_sim
+            return dir_loss
+
+        dir_loss = cosine_dir_loss(pred_grad_x, pred_grad_y, target_grad_x, target_grad_y)
+#         total_grad_loss = (0.8*dir_loss + 0.2*amp_loss) * target_grad_amp_weight
+        total_grad_loss = dir_loss * target_grad_amp_weight
+#         total_grad_loss = F.l1_loss(pred, target, reduction='none')
+#         total_grad_loss = dir_loss
+        total_grad_loss = torch.sum(total_grad_loss, dim=(2,3))
+        
+        if reduction == "mean":
+            total_grad_loss = torch.mean(total_grad_loss)
+        elif reduction == "sum":
+            total_grad_loss = torch.sum(total_grad_loss)
+
+        return total_grad_loss
+    
+    def _cosine_similarity_loss(
+        self,
+        pred_blocks: torch.Tensor,
+        target_blocks: torch.Tensor,
+        eps: float = 1e-8
+    ) -> torch.Tensor:
+        B,C,h,w,N = pred_blocks.shape
+        pred_vec = pred_blocks.reshape(B,C,h*w,N)
+        target_vec = target_blocks.reshape(B,C,h*w,N)
+        
+        pred_vec = F.normalize(pred_vec, p=2, dim=2, eps=eps)
+        target_vec = F.normalize(target_vec, p=2, dim=2, eps=eps)
+        cos_sim = torch.sum(pred_vec * target_vec, dim=2)
+        cos_loss = 1 - cos_sim
+        return cos_loss
+    
+    def _compute_histogram_soft(self, x, bins=32, a=2, min_val=0, max_val=255, eps=1e-8):
+        device = x.device
+        dtype = x.dtype
+        bin_width = (max_val - min_val) / bins
+        bin_centers = torch.linspace(min_val + bin_width/2, max_val - bin_width/2, bins, device=device, dtype=dtype)
+        x_expanded = x.unsqueeze(-1)
+        centers_expanded = bin_centers.unsqueeze(0).unsqueeze(0)
+        sigma = bin_width / a
+        gaussian_weights = torch.exp(-((x_expanded - centers_expanded) ** 2) / (2 * sigma ** 2))
+        gaussian_weights = gaussian_weights / (gaussian_weights.sum(dim=-1, keepdim=True) + eps)
+        hist = gaussian_weights.sum(dim=1)
+        hist_sum = hist.sum(dim=1, keepdim=True) + eps
+        hist = hist / hist_sum
+        hist = torch.clamp(hist, min=eps, max=1.0 - eps)
+        return hist
+
+    def _block_loss(
+        self,
+        pred: torch.Tensor,
+        target: torch.Tensor,
+        bins,
+        scale,
+        a,
+        reduction: str = "none",
+    ) -> torch.Tensor:
+        eps = 1e-8
+        B, C, h_win, w_win, num_blocks = pred.shape
+        
+        cos_loss_per_block = self._cosine_similarity_loss(pred, target, eps=eps)
+        
+        pred_flat = pred.permute(0, 1, 4, 2, 3).reshape(-1, h_win * w_win)
+        target_flat = target.permute(0, 1, 4, 2, 3).reshape(-1, h_win * w_win)
+
+        pred_hist = self._compute_histogram_soft(pred_flat, bins=bins, a=a, eps=eps)
+        target_hist = self._compute_histogram_soft(target_flat, bins=bins, a=a, eps=eps)
+
+        kl_loss_per_block = F.kl_div(
+            torch.log(pred_hist),
+            target_hist,
+            reduction="none"
+        ).sum(dim=1)
+
+        kl_loss_per_block = kl_loss_per_block.reshape(B, C, num_blocks)
+        
+#         total_loss_per_block = self.scale_cos_weight[scale]*cos_loss_per_block
+
+        total_loss_per_block = self.scale_kl_weight[scale]*kl_loss_per_block
+
+        if reduction == "mean":
+            total_loss = total_loss_per_block.mean()
+        elif reduction == "sum":
+            total_loss = total_loss_per_block.sum()
+        elif reduction == "none":
+            total_loss = total_loss_per_block
+
+        return total_loss
+    
+    def _block_weight(self, target_blocks, reduction="none"):
+        target_block_std = torch.std(target_blocks, dim=(2, 3))
+
+        std_sum = torch.sum(target_block_std, dim=-1, keepdim=True)+1e-8
+        std_weight = target_block_std / std_sum
+
+        std_weight = std_weight.detach()
+        
+        if reduction == "mean":
+            std_weight = std_weight.mean()
+        elif reduction == "sum":
+            std_weight = std_weight.sum()
+            
+        return std_weight
+    
+    def _get_down_scale(self, img, scale):
+        B, C, H, W = img.shape
+        if scale == 1:
+            img_scaled = img
+        else:
+            gauss_kernel = self.gauss_kernels[scale].to(img.device).type(img.dtype)
+            padding = gauss_kernel.shape[-1] // 2
+
+            img_blur = F.conv2d(img, gauss_kernel, padding=padding, groups=C)
+            img_scaled = F.avg_pool2d(img_blur, kernel_size=scale, stride=scale)
+        return img_scaled
+    
+#     def _regaularization(self, pred, pred_max_scale):
+#         B, C, H, W = pred.shape
+#         B, C, h, w = pred_max_scale.shape
+#         scale = H // h
+        
+#         pred_scaled = self._get_down_scale(pred, scale)
+        
+#         pred_scaled_vec = pred_scaled.reshape(B,C,h*w)
+#         pred_max_scale_vec = pred_max_scale.reshape(B,C,h*w)
+        
+#         pred_scaled_vec = F.normalize(pred_scaled_vec, p=2, dim=2, eps=1e-8)
+#         pred_max_scale_vec = F.normalize(pred_max_scale_vec, p=2, dim=2, eps=1e-8)
+#         cos_sim = torch.sum(pred_scaled_vec * pred_max_scale_vec, dim=2)
+#         cos_loss = 1 - cos_sim
+        
+#         return 0.00001*torch.mean(cos_loss)
+        
+
+    def _multi_scale_block_loss(self, pred: torch.Tensor, target: torch.Tensor, reduction="mean"):
+        assert pred.shape == target.shape, "pred and target must have same shape"
+        total_loss = 0.0
+        B, C, H, W = pred.shape
         h_win, w_win = self.win_size
         h_stride, w_stride = self.stride
+        bins = 64
+        
+        curr_h_win = h_win
+        curr_w_win = w_win
+        curr_h_stride = h_stride
+        curr_w_stride = w_stride
+        
+        for scale_idx, scale in enumerate(self.scales):
+            pred_scaled = self._get_down_scale(pred, scale)
+            target_scaled = self._get_down_scale(target, scale)
 
-        unfold = nn.Unfold(kernel_size=self.win_size, stride=self.stride).to(x.device)
-        x_unfold = unfold(x)  # (B, C*h_win*w_win, num_blocks)
+            pred_gray = self._rgb2gray(pred_scaled)
+            target_gray = self._rgb2gray(target_scaled)
 
-        num_h = (H - h_win) // h_stride + 1
-        num_w = (W - w_win) // w_stride + 1
-        num_blocks = num_h * num_w
+#             pred_blocks, _ = self._sliding_window_unfold(pred_scaled, curr_h_win, curr_w_win, curr_h_stride, curr_w_stride)
+#             target_blocks, _ = self._sliding_window_unfold(target_scaled, curr_h_win, curr_w_win, curr_h_stride, curr_w_stride)
+            pred_blocks, _ = self._sliding_window_unfold(pred_scaled, curr_h_win, curr_w_win, curr_h_stride, curr_w_stride)
+            target_blocks, _ = self._sliding_window_unfold(target_scaled, curr_h_win, curr_w_win, curr_h_stride, curr_w_stride)
 
-        # (B, C, h_win, w_win, num_blocks)
-        x_blocks = x_unfold.reshape(B, C, h_win, w_win, num_blocks)
-        return x_blocks, num_blocks
+#             pixel_scale_loss = self._l1_loss(pred_gray, target_gray, reduction="mean")
+            
+            w_a = 7.0
+            w_b = 4.0
+            w_c = 0.01
 
-    def _compute_multi_class_mask(self, x_blocks: torch.Tensor, num_blocks: int):
-        B, C = x_blocks.shape[:2]
-
-        rgb2gray_weights = torch.tensor([0.299, 0.587, 0.114], dtype=x_blocks.dtype, device=x_blocks.device)
-        rgb2gray_weights = rgb2gray_weights.reshape(1, 3, 1, 1, 1)
-
-        gray_blocks = torch.sum(x_blocks * rgb2gray_weights, dim=1, keepdim=True)
-
-        win_var = torch.var(gray_blocks, dim=(2, 3), unbiased=False)
-        win_complexity = win_var.squeeze(1)
-
-        per_img_min = win_complexity.min(dim=1, keepdim=True)[0]  # (B, 1)
-        per_img_max = win_complexity.max(dim=1, keepdim=True)[0]  # (B, 1)
-        norm_complexity = (win_complexity - per_img_min) / (per_img_max - per_img_min + 1e-8)  # (B, num_blocks)
-        mask = torch.zeros(B, self.num_classes, num_blocks, device=x_blocks.device)
-        for i, cfg in enumerate(self.class_configs):
-            min_thr, max_thr = cfg["threshold_range"]
-            if i == self.num_classes - 1:
-                class_mask = (norm_complexity >= min_thr) & (norm_complexity <= max_thr)
+            if scale > 10:
+                pixel_block_loss = self._block_loss(pred_blocks, target_blocks, int(bins), scale_idx, a=2, reduction="mean")
+                tv_loss = self._tv_loss(pred_scaled, target_scaled, reduction="mean")
+                scale_loss = w_b * pixel_block_loss + w_c*tv_loss*self.scale_tv_weight[4-scale_idx]
+            elif scale > 5:
+                tv_loss = self._tv_loss(pred_scaled, target_scaled, reduction="mean")
+                pixel_block_loss = self._block_loss(pred_blocks, target_blocks, int(bins), scale_idx, a=2, reduction="mean")
+                scale_loss = w_b * pixel_block_loss + w_c*tv_loss*self.scale_tv_weight[4-scale_idx]
             else:
-                class_mask = (norm_complexity >= min_thr) & (norm_complexity < max_thr)
-            mask[:, i, :] = class_mask.float()
+                tv_loss = self._tv_loss(pred_scaled, target_scaled, reduction="mean")
+                pixel_scale_loss = self._scale_loss(pred_gray, target_gray, reduction="mean")
+                pixel_block_loss = self._block_loss(pred_blocks, target_blocks, int(bins), scale_idx, a=2, reduction="mean")
+                scale_loss = w_b * pixel_block_loss + w_a * pixel_scale_loss * self.scale_weights[scale_idx] + w_c*tv_loss*self.scale_tv_weight[4-scale_idx]
 
-        return mask, norm_complexity
+            total_loss += scale_loss
+            
+            bins = bins / 2
 
-    @staticmethod
-    def ssim_loss(pred: torch.Tensor, target: torch.Tensor, reduction: str = "none"):
-        B, C, h, w, num_blocks = pred.shape
-        pred_reshaped = pred.permute(0, 4, 1, 2, 3).reshape(B*num_blocks, C, h, w)
-        target_reshaped = target.permute(0, 4, 1, 2, 3).reshape(B*num_blocks, C, h, w)
+        if reduction == "mean":
+            total_loss = total_loss.mean()
+        elif reduction == "sum":
+            total_loss = total_loss.sum()
 
-        ssim_val = F.l1_loss(pred_reshaped, target_reshaped, reduction=reduction)
-        ssim_loss = 1 - ssim_val
-
-        ssim_loss = ssim_loss.reshape(B, num_blocks, C, h, w).mean(dim=(2,3,4))
-        return ssim_loss
-
-    def _compute_class_loss(self, pred_blocks: torch.Tensor, target_blocks: torch.Tensor, mask: torch.Tensor, class_idx: int):
-        cfg = self.class_configs[class_idx]
-        B, num_blocks = mask.shape[0], mask.shape[2]
-        class_mask = mask[:, class_idx, :]
-        class_weight = cfg["class_weight"]
+        return total_loss
+    
+    def _compute_class_loss(self, pred: torch.Tensor, target: torch.Tensor):
+        cfg = self.class_configs[0]
 
         class_loss_total = 0.0
-        loss_details = {}
-
         for loss_idx, (loss_fn, loss_weight) in enumerate(zip(cfg["losses"], cfg["loss_weights"])):
-            loss_name = f"class_{class_idx}_loss_{loss_idx}_{loss_fn.__name__}"
+            pixel_loss = loss_fn(pred, target, reduction="mean")
+            class_loss_total += pixel_loss * loss_weight
 
-            if loss_fn == self.ssim_loss:
-                win_loss = loss_fn(pred_blocks, target_blocks)
-            else:
-                pixel_loss = loss_fn(pred_blocks, target_blocks, reduction="none")
-                win_loss = torch.mean(pixel_loss, dim=(1, 2, 3))
+        return class_loss_total
 
-            masked_loss_sum = (win_loss * class_mask).sum(dim=1)
-            valid_win_count = class_mask.sum(dim=1) + 1e-8
-            per_img_loss = (masked_loss_sum / valid_win_count) * loss_weight * class_weight
+    def forward(self, pred, target, epoch, is_plot):
+        total_loss = self._compute_class_loss(
+            pred, target
+        )
 
-            class_loss_total += per_img_loss.mean()
-
-            loss_details[loss_name] = {
-                "loss_value": per_img_loss.mean().item(),
-                "valid_win_count": class_mask.sum(dim=1).int().tolist()
-            }
-
-        return class_loss_total, loss_details
-
-    def forward(self, pred, target):
-        pred_blocks, num_blocks = self._sliding_window_unfold(pred)
-        target_blocks, _ = self._sliding_window_unfold(target)
-
-        multi_class_mask, norm_complexity = self._compute_multi_class_mask(target_blocks, num_blocks)
-
-        total_loss = 0.0
-        all_loss_details = {
-            "norm_complexity_range": (norm_complexity.min().item(), norm_complexity.max().item()),
-            "class_valid_wins": [multi_class_mask[:, i, :].sum(dim=1).int().tolist() for i in range(self.num_classes)]
-        }
-
-        for class_idx in range(self.num_classes):
-            class_loss, class_loss_details = self._compute_class_loss(
-                pred_blocks, target_blocks, multi_class_mask, class_idx
-            )
-            total_loss += class_loss
-            all_loss_details.update(class_loss_details)
-
-        if self.return_details:
-            all_loss_details["total_loss"] = total_loss.item()
-            return total_loss, all_loss_details
         return total_loss
