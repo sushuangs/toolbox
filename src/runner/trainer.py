@@ -20,7 +20,7 @@ class Trainer:
         self.optimizer = make_optimizer(config.optim_args, self.model)
         self.recorder = ExperimentRecorder(config.exp_name, config, logger, self.writer, self.save_dir)
         self.loss_fn = Loss(config, self.writer)
-        self.metric_caculator = MetricCalculator(config.metrics)
+        self.metric_caculator = MetricCalculator(config.metrics, config.rgb_range)
         self.TMS = MetricStats()
         self.VMS = MetricStats()
         self.logger = logger

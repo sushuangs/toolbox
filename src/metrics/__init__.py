@@ -96,8 +96,9 @@ SUPPORTED_METRICS = {
 
 
 class MetricCalculator:
-    def __init__(self, metric_configs):
+    def __init__(self, metric_configs, rgb_range):
         self.metric_configs = self._validate_configs(metric_configs)
+        self.rgb_range = rgb_range
 
     def _validate_configs(self, configs):
         validated = {}
@@ -116,7 +117,7 @@ class MetricCalculator:
         return validated
 
     def calculate(self, pred, hr):
-        pred, hr = Tensor2np(pred, hr)
+        pred, hr = Tensor2np(pred, hr, rgb_range=self.rgb_range)
         results = {}
         for name, m_set in self.metric_configs.items():
             try:

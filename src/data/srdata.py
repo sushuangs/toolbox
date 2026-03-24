@@ -19,7 +19,10 @@ class SRData(data.Dataset):
         self.do_eval = True
         self.benchmark = benchmark
         self.scale = config.scale
-        
+        if train:
+            self.repeat = config.repeat_num
+        else:
+            self.repeat = 1
 
         self._set_filesystem(config.dir_data)
         if config.ext.find('img') < 0:
@@ -93,7 +96,7 @@ class SRData(data.Dataset):
         return pair_t[0], pair_t[1], filename
 
     def __len__(self):
-        return len(self.images_hr)
+        return len(self.images_hr) * self.repeat
 
     def _get_index(self, idx):
         if self.train:
