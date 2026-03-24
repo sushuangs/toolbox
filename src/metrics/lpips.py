@@ -44,7 +44,7 @@ def calculate_lpips(img, img2, crop_border, input_order='HWC'):
     img_gt = img2 / 255.
     img_restored = img / 255.
     
-    img_gt, img_restored = img2tensor([img_gt, img_restored], bgr2rgb=True, float32=True)
+    img_gt, img_restored = img2tensor([img_gt, img_restored], bgr2rgb=False, float32=True)
     # norm to [-1, 1]
     normalize(img_gt, mean, std, inplace=True)
     normalize(img_restored, mean, std, inplace=True)
