@@ -14,6 +14,8 @@ class EDSR(nn.Module):
         kernel_size = 3 
         scale = args.upscale
         act = nn.ReLU(True)
+        
+        self.rgb_range = args.rgb_range
 
         self.sub_mean = common.MeanShift(args.rgb_range)
         self.add_mean = common.MeanShift(args.rgb_range, sign=1)
@@ -40,6 +42,7 @@ class EDSR(nn.Module):
         self.tail = nn.Sequential(*m_tail)
 
     def forward(self, x):
+        x = x * self.rgb_range
         x = self.sub_mean(x)
         x = self.head(x)
 
@@ -48,6 +51,7 @@ class EDSR(nn.Module):
 
         x = self.tail(res)
         x = self.add_mean(x)
+        x = x / self.rgb_range
 
         return x 
 
