@@ -27,15 +27,9 @@ class MultiClassLoss(nn.Module):
         default_configs = [
             {
                 "losses": [self._l1_loss, self._multi_scale_block_loss], 
-                "loss_weights": [1.0, 1.5],                          
+                "loss_weights": [1.0, 1.0],                          
             }
         ]
-#         default_configs = [
-#             {
-#                 "losses": [self._l1_loss, self._multi_scale_block_loss, self._tv_loss], 
-#                 "loss_weights": [1.0, 1.0, 0.01],                          
-#             }
-#         ]
         self.class_configs = class_configs if class_configs is not None else default_configs
         self.num_classes = len(self.class_configs)
         
@@ -290,8 +284,13 @@ class MultiClassLoss(nn.Module):
 
         kl_loss_per_block = kl_loss_per_block.reshape(B, C, num_blocks)
 
+<<<<<<< HEAD
         total_loss_per_block = kl_loss_per_block 
         
+=======
+        total_loss_per_block = kl_loss_per_block
+
+>>>>>>> ac48cfe7c3405f97e97d4027c871f7d46552a6b5
         if reduction == "mean":
             total_loss = total_loss_per_block.mean()
         elif reduction == "sum":
@@ -339,6 +338,7 @@ class MultiClassLoss(nn.Module):
             pred_scaled = self._get_down_scale(pred, scale)
             target_scaled = self._get_down_scale(target, scale)
 
+<<<<<<< HEAD
             pixel_scale_loss = self._scale_loss(pred_scaled, target_scaled, reduction="mean")
             total_pixel_block_loss = 0.0
             bins_tmp = bins
@@ -352,6 +352,25 @@ class MultiClassLoss(nn.Module):
                 bins_tmp = bins_tmp / 2
 
             scale_loss = total_pixel_block_loss*(1-self.b_con*self.b_weights[scale_idx]) + pixel_scale_loss*self.b_con*self.b_weights[scale_idx]
+=======
+            pred_gray = self._rgb2gray(pred_scaled)
+            target_gray = self._rgb2gray(target_scaled)
+
+            pred_blocks, _ = self._sliding_window_unfold(pred_scaled, h_win, w_win, h_stride, w_stride)
+            target_blocks, _ = self._sliding_window_unfold(target_scaled, h_win, w_win, h_stride, w_stride)
+#             pred_blocks, _ = self._sliding_window_unfold(pred_gray, h_win, w_win, h_stride, w_stride)
+#             target_blocks, _ = self._sliding_window_unfold(target_gray, h_win, w_win, h_stride, w_stride)
+
+<<<<<<< HEAD:src/metrics/complexity_loss.py
+            pixel_scale_loss = self._scale_loss(pred_gray, target_gray, reduction="mean")
+#             pixel_scale_loss = self._scale_loss(pred_scaled, target_scaled, reduction="mean")
+=======
+#             pixel_scale_loss = self._scale_loss(pred_gray, target_gray, reduction="mean")
+            pixel_scale_loss = self._scale_loss(pred_scaled, target_scaled, reduction="mean")
+>>>>>>> 0f96b742323a388b3c5c5f8ffcb5e12c832dd90f:src/losses/complexity_loss.py
+            pixel_block_loss = self._block_loss(pred_blocks, target_blocks, int(bins), scale_idx, a=a, reduction="mean")
+            scale_loss = pixel_block_loss*(1-self.b_con*self.b_weights[scale_idx]) + pixel_scale_loss*self.b_con*self.b_weights[scale_idx]
+>>>>>>> ac48cfe7c3405f97e97d4027c871f7d46552a6b5
 
             total_loss += self.scale_weights[scale_idx]*scale_loss
             if scale_idx%2>0:
@@ -374,7 +393,7 @@ class MultiClassLoss(nn.Module):
 
         return class_loss_total
 
-    def forward(self, pred, target):
+    def forward(self, pred, target, epoch, is_plot):
         total_loss = self._compute_class_loss(
             pred, target
         )
