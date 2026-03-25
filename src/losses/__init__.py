@@ -8,6 +8,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import lpips
+
 
 class Loss(nn.modules.loss._Loss):
     def __init__(self, args, writer):
@@ -25,11 +27,12 @@ class Loss(nn.modules.loss._Loss):
             elif loss_type == 'L1':
                 loss_function = nn.L1Loss()
             elif loss_type.find('VGG') >= 0:
-                module = import_module('loss.vgg')
-                loss_function = getattr(module, 'VGG')(
-                    loss_type[3:],
-                    rgb_range=args.rgb_range
+                module = import_module('losses.perceptual_loss')
+                loss_function = getattr(module, 'PerceptualLoss')(
+                    **namespace_to_dict(loss.params)
                 )
+            elif loss_type.find('LPIPS') >= 0:
+                loss_function = lpips.LPIPS(net='vgg').cuda().eval()
             elif loss_type.find('GAN') >= 0:
                 module = import_module('loss.adversarial')
                 loss_function = getattr(module, 'Adversarial')(
@@ -37,7 +40,7 @@ class Loss(nn.modules.loss._Loss):
                     loss_type
                 )
             elif loss_type.find('CML') >= 0:
-                module = import_module('metrics.complexity_loss')
+                module = import_module('losses.complexity_loss')
                 loss_function = getattr(module, 'MultiClassLoss')(
                     writer,
                     **namespace_to_dict(loss.params)
@@ -72,7 +75,10 @@ class Loss(nn.modules.loss._Loss):
         metric_list = {}
         for i, l in enumerate(self.loss):
             if l['function'] is not None:
-                loss = l['function'](sr, hr, **args)
+                if l['type'].find('LPIPS') >= 0:
+                    loss = l['function'](sr, hr, **args).mean()
+                else:
+                    loss = l['function'](sr, hr, **args)
                 effective_loss = l['weight'] * loss
                 metric_list[l['type']] = loss.item()
                 losses.append(effective_loss)

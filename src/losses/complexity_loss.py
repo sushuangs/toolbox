@@ -385,7 +385,7 @@ class MultiClassLoss(nn.Module):
 
         return class_loss_total
 
-    def forward(self, pred, target, epoch, is_plot):
+    def forward(self, pred, target):
         total_loss = self._compute_class_loss(
             pred, target
         )

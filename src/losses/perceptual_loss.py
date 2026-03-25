@@ -3,6 +3,7 @@ import torch
 from torch import autograd as autograd
 from torch import nn as nn
 from torch.nn import functional as F
+from utils.config import namespace_to_dict
 
 from losses.vgg_arch import VGGFeatureExtractor
 from losses.patch_loss_c import PatchesKernel3D
@@ -48,11 +49,11 @@ class PerceptualLoss(nn.Module):
         self.perceptual_weight = perceptual_weight
         self.patch_weights = perceptual_patch_weight
         self.style_weight = style_weight
-        self.layer_weights = layer_weights
+        self.layer_weights = namespace_to_dict(layer_weights)
         self.perceptual_kernels = perceptual_kernels
         self.use_std_to_force = use_std_to_force
         self.vgg = VGGFeatureExtractor(
-            layer_name_list=list(layer_weights.keys()),
+            layer_name_list=list(namespace_to_dict(layer_weights).keys()),
             vgg_type=vgg_type,
             use_input_norm=use_input_norm,
             range_norm=range_norm)
@@ -114,7 +115,7 @@ class PerceptualLoss(nn.Module):
         else:
             style_loss = None
 
-        return percep_loss, style_loss
+        return percep_loss
 
     def _gram_mat(self, x):
         """Calculate Gram matrix.

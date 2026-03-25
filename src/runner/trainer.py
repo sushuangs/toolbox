@@ -38,7 +38,7 @@ class Trainer:
             lr, hr = batch[0].to(self.device), batch[1].to(self.device)
             self.optimizer.zero_grad()
             pred = self.model(lr)
-            loss, batch_metrics = self.loss_fn(pred, hr, epoch=epoch, is_plot=first_batch)
+            loss, batch_metrics = self.loss_fn(pred, hr)
             
             loss.backward()
             self.optimizer.step()
