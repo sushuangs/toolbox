@@ -27,7 +27,7 @@ class MultiClassLoss(nn.Module):
         default_configs = [
             {
                 "losses": [self._l1_loss, self._multi_scale_block_loss], 
-                "loss_weights": [1.0, 1.0],                          
+                "loss_weights": [1.0, 1.5],                          
             }
         ]
         self.class_configs = class_configs if class_configs is not None else default_configs
@@ -392,7 +392,7 @@ class MultiClassLoss(nn.Module):
 
         return class_loss_total
 
-    def forward(self, pred, target, epoch, is_plot):
+    def forward(self, pred, target):
         total_loss = self._compute_class_loss(
             pred, target
         )
