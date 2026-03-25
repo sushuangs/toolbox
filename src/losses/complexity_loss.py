@@ -13,8 +13,8 @@ class MultiClassLoss(nn.Module):
     def __init__(
         self,
         writer,
-        win_size: Tuple[int, int] = (12, 12),
-        stride: Tuple[int, int] = (12, 12),
+        win_size,
+        stride,
         class_configs: List[Dict] = None,  
     ):
         super().__init__()
@@ -223,9 +223,6 @@ class MultiClassLoss(nn.Module):
             return dir_loss
 
         dir_loss = cosine_dir_loss(pred_grad_x, pred_grad_y, target_grad_x, target_grad_y)
-#         total_grad_loss = (0.8*dir_loss + 0.2*amp_loss) * target_grad_amp_weight
-#         total_grad_loss = dir_loss * target_grad_amp_weight
-#         total_grad_loss = torch.sum(total_grad_loss, dim=(2,3))
         total_grad_loss = dir_loss 
         
         if reduction == "mean":
@@ -279,10 +276,6 @@ class MultiClassLoss(nn.Module):
         eps = 1e-8
         B, C, h_win, w_win, num_blocks = pred.shape
         
-        block_weight = self._block_weight(target)
-        
-#         cos_loss_per_block = self._cosine_similarity_loss(pred, target, eps=eps)
-        
         pred_flat = pred.permute(0, 1, 4, 2, 3).reshape(-1, h_win * w_win)
         target_flat = target.permute(0, 1, 4, 2, 3).reshape(-1, h_win * w_win)
 
@@ -296,11 +289,8 @@ class MultiClassLoss(nn.Module):
         ).sum(dim=1)
 
         kl_loss_per_block = kl_loss_per_block.reshape(B, C, num_blocks)
-        
-#         total_loss_per_block = self.scale_cos_weight[scale]*cos_loss_per_block
 
-        total_loss_per_block = kl_loss_per_block * block_weight
-        total_loss_per_block = torch.sum(total_loss_per_block, dim=-1)
+        total_loss_per_block = kl_loss_per_block 
         
         if reduction == "mean":
             total_loss = total_loss_per_block.mean()
@@ -342,8 +332,6 @@ class MultiClassLoss(nn.Module):
         assert pred.shape == target.shape, "pred and target must have same shape"
         total_loss = 0.0
         B, C, H, W = pred.shape
-        h_win, w_win = self.win_size
-        h_stride, w_stride = self.stride
         bins = 16
         a = 2.0
         
@@ -351,18 +339,19 @@ class MultiClassLoss(nn.Module):
             pred_scaled = self._get_down_scale(pred, scale)
             target_scaled = self._get_down_scale(target, scale)
 
-            pred_gray = self._rgb2gray(pred_scaled)
-            target_gray = self._rgb2gray(target_scaled)
-
-            pred_blocks, _ = self._sliding_window_unfold(pred_scaled, h_win, w_win, h_stride, w_stride)
-            target_blocks, _ = self._sliding_window_unfold(target_scaled, h_win, w_win, h_stride, w_stride)
-#             pred_blocks, _ = self._sliding_window_unfold(pred_gray, h_win, w_win, h_stride, w_stride)
-#             target_blocks, _ = self._sliding_window_unfold(target_gray, h_win, w_win, h_stride, w_stride)
-
-#             pixel_scale_loss = self._scale_loss(pred_gray, target_gray, reduction="mean")
             pixel_scale_loss = self._scale_loss(pred_scaled, target_scaled, reduction="mean")
-            pixel_block_loss = self._block_loss(pred_blocks, target_blocks, int(bins), scale_idx, a=a, reduction="mean")
-            scale_loss = pixel_block_loss*(1-self.b_con*self.b_weights[scale_idx]) + pixel_scale_loss*self.b_con*self.b_weights[scale_idx]
+            total_pixel_block_loss = 0.0
+            bins_tmp = bins
+            for win, stride in zip(self.win_size, self.stride):
+                h_win, w_win = win
+                h_stride, w_stride = stride
+                pred_blocks, _ = self._sliding_window_unfold(pred_scaled, h_win, w_win, h_stride, w_stride)
+                target_blocks, _ = self._sliding_window_unfold(target_scaled, h_win, w_win, h_stride, w_stride)
+                pixel_block_loss = self._block_loss(pred_blocks, target_blocks, int(bins_tmp), scale_idx, a=a, reduction="mean")
+                total_pixel_block_loss += pixel_block_loss
+                bins_tmp = bins_tmp / 2
+
+            scale_loss = total_pixel_block_loss*(1-self.b_con*self.b_weights[scale_idx]) + pixel_scale_loss*self.b_con*self.b_weights[scale_idx]
 
             total_loss += self.scale_weights[scale_idx]*scale_loss
             if scale_idx%2>0:
