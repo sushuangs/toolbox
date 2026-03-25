@@ -37,9 +37,14 @@ class Loss(nn.modules.loss._Loss):
                     loss_type
                 )
             elif loss_type.find('CML') >= 0:
-                module = import_module('metrics.complexity_loss')
+                module = import_module('losses.complexity_loss')
                 loss_function = getattr(module, 'MultiClassLoss')(
                     writer,
+                    **namespace_to_dict(loss.params)
+                )
+            elif loss_type.find('PLC') >= 0:
+                module = import_module('losses.patch_loss_c')
+                loss_function = getattr(module, 'patchLoss3DXD')(
                     **namespace_to_dict(loss.params)
                 )
             self.loss.append({

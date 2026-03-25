@@ -56,7 +56,7 @@ class patchLoss3DXD(nn.Module):
                 cosine0_x_y = torch.div(torch.div(dot_x_y, torch.sqrt(torch.sum(x ** 2, dim=1))), torch.sqrt(torch.sum(y ** 2, dim=1)))
                 loss = loss + torch.mean((1-cosine0_x_y)) # y = 1-x
             else:
-                dy = torch.std(labels_trans, dim=1)
+                dy = torch.std(labels_trans*10, dim=1)
                 cosine_x_y = torch.div(torch.div(dot_x_y, torch.sqrt(torch.sum(x ** 2, dim=1))), torch.sqrt(torch.sum(y ** 2, dim=1)))
                 cosine_x_y_d = torch.mul((1-cosine_x_y), dy) # y = (1-x) dy
                 loss = loss + torch.mean(cosine_x_y_d) 
