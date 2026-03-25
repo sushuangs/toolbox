@@ -30,20 +30,28 @@ class MultiClassLoss(nn.Module):
                 "loss_weights": [1.0, 1.0],                          
             }
         ]
+#         default_configs = [
+#             {
+#                 "losses": [self._l1_loss, self._multi_scale_block_loss, self._tv_loss], 
+#                 "loss_weights": [1.0, 1.0, 0.001],                          
+#             }
+#         ]
         self.class_configs = class_configs if class_configs is not None else default_configs
         self.num_classes = len(self.class_configs)
         
         self._write_configs_to_tensorboard(default_configs)
         
-        self.scales = [1, 2, 4, 8, 16]
+        self.scales = [1, 2, 4]
 
-        self.scale_weights = self._get_weight(3.70, [1,2,4])
-        self.scale_kl_weight = self._get_weight(2.30, [1,2,4,8,16])
-        self.scale_tv_weight = self._get_weight(3.70, [1,2,4,8,16])
+        self.scale_weights = self._get_weight(1.50, [1,2,4], norm=True)
+#         self.scale_weights = [0.5,0.35,0.15]
+        self.b_weights = self._get_weight(2.50, [1,2,4])
+        self.b_con = 0.30
 
 #         self.scale_cos_weight = self._get_weight(3.00, self.scales)
         
-        print(self._get_weight(3.5, self.scales))
+        print(self.b_weights)
+        print(self.scale_weights)
 
 #         self.scales = [1, 2, 4]
 #         self.scale_weights = [0.6, 0.3, 0.1]
@@ -123,7 +131,7 @@ class MultiClassLoss(nn.Module):
         
         return x_blocks, num_blocks
     
-    def _rgb2gray(self, x):
+    def _rgb2gray(self, x, norm=False):
         B, C, H, W = x.shape
         if C == 3:
             weights = self.gray_weights.to(x.device).type(x.dtype)
@@ -132,15 +140,17 @@ class MultiClassLoss(nn.Module):
         gray = torch.sum(x * weights.view(1, C, 1, 1), dim=1, keepdim=True)
         return gray
 
-    def _get_weight(self, k, scales):
-        weights_tmp = []
+    def _get_weight(self, k, scales, norm=False):
         weights = []
         for scale in range(0, len(scales)):
             weight = math.exp(-k * scale / len(scales))
-            weights_tmp.append(weight)
-        for weight in weights_tmp:
-            weight = weight / sum(weights_tmp)
             weights.append(weight)
+        if norm:
+            weights_norm = []
+            for weight in weights:
+                weight = weight / sum(weights)
+                weights_norm.append(weight)
+            return weights_norm
         return weights
 
     def _tv_loss(self, pred, target, reduction="mean"):
@@ -214,10 +224,9 @@ class MultiClassLoss(nn.Module):
 
         dir_loss = cosine_dir_loss(pred_grad_x, pred_grad_y, target_grad_x, target_grad_y)
 #         total_grad_loss = (0.8*dir_loss + 0.2*amp_loss) * target_grad_amp_weight
-        total_grad_loss = dir_loss * target_grad_amp_weight
-#         total_grad_loss = F.l1_loss(pred, target, reduction='none')
-#         total_grad_loss = dir_loss
-        total_grad_loss = torch.sum(total_grad_loss, dim=(2,3))
+#         total_grad_loss = dir_loss * target_grad_amp_weight
+#         total_grad_loss = torch.sum(total_grad_loss, dim=(2,3))
+        total_grad_loss = dir_loss 
         
         if reduction == "mean":
             total_grad_loss = torch.mean(total_grad_loss)
@@ -242,7 +251,7 @@ class MultiClassLoss(nn.Module):
         cos_loss = 1 - cos_sim
         return cos_loss
     
-    def _compute_histogram_soft(self, x, bins=32, a=2, min_val=0, max_val=255, eps=1e-8):
+    def _compute_histogram_soft(self, x, bins=32, a=2, min_val=-0.50, max_val=1.50, eps=1e-8):
         device = x.device
         dtype = x.dtype
         bin_width = (max_val - min_val) / bins
@@ -270,7 +279,7 @@ class MultiClassLoss(nn.Module):
         eps = 1e-8
         B, C, h_win, w_win, num_blocks = pred.shape
         
-        cos_loss_per_block = self._cosine_similarity_loss(pred, target, eps=eps)
+#         cos_loss_per_block = self._cosine_similarity_loss(pred, target, eps=eps)
         
         pred_flat = pred.permute(0, 1, 4, 2, 3).reshape(-1, h_win * w_win)
         target_flat = target.permute(0, 1, 4, 2, 3).reshape(-1, h_win * w_win)
@@ -288,7 +297,7 @@ class MultiClassLoss(nn.Module):
         
 #         total_loss_per_block = self.scale_cos_weight[scale]*cos_loss_per_block
 
-        total_loss_per_block = self.scale_kl_weight[scale]*kl_loss_per_block
+        total_loss_per_block = kl_loss_per_block
 
         if reduction == "mean":
             total_loss = total_loss_per_block.mean()
@@ -325,24 +334,6 @@ class MultiClassLoss(nn.Module):
             img_blur = F.conv2d(img, gauss_kernel, padding=padding, groups=C)
             img_scaled = F.avg_pool2d(img_blur, kernel_size=scale, stride=scale)
         return img_scaled
-    
-#     def _regaularization(self, pred, pred_max_scale):
-#         B, C, H, W = pred.shape
-#         B, C, h, w = pred_max_scale.shape
-#         scale = H // h
-        
-#         pred_scaled = self._get_down_scale(pred, scale)
-        
-#         pred_scaled_vec = pred_scaled.reshape(B,C,h*w)
-#         pred_max_scale_vec = pred_max_scale.reshape(B,C,h*w)
-        
-#         pred_scaled_vec = F.normalize(pred_scaled_vec, p=2, dim=2, eps=1e-8)
-#         pred_max_scale_vec = F.normalize(pred_max_scale_vec, p=2, dim=2, eps=1e-8)
-#         cos_sim = torch.sum(pred_scaled_vec * pred_max_scale_vec, dim=2)
-#         cos_loss = 1 - cos_sim
-        
-#         return 0.00001*torch.mean(cos_loss)
-        
 
     def _multi_scale_block_loss(self, pred: torch.Tensor, target: torch.Tensor, reduction="mean"):
         assert pred.shape == target.shape, "pred and target must have same shape"
@@ -350,12 +341,8 @@ class MultiClassLoss(nn.Module):
         B, C, H, W = pred.shape
         h_win, w_win = self.win_size
         h_stride, w_stride = self.stride
-        bins = 64
-        
-        curr_h_win = h_win
-        curr_w_win = w_win
-        curr_h_stride = h_stride
-        curr_w_stride = w_stride
+        bins = 16
+        a = 2.0
         
         for scale_idx, scale in enumerate(self.scales):
             pred_scaled = self._get_down_scale(pred, scale)
@@ -364,34 +351,19 @@ class MultiClassLoss(nn.Module):
             pred_gray = self._rgb2gray(pred_scaled)
             target_gray = self._rgb2gray(target_scaled)
 
-#             pred_blocks, _ = self._sliding_window_unfold(pred_scaled, curr_h_win, curr_w_win, curr_h_stride, curr_w_stride)
-#             target_blocks, _ = self._sliding_window_unfold(target_scaled, curr_h_win, curr_w_win, curr_h_stride, curr_w_stride)
-            pred_blocks, _ = self._sliding_window_unfold(pred_scaled, curr_h_win, curr_w_win, curr_h_stride, curr_w_stride)
-            target_blocks, _ = self._sliding_window_unfold(target_scaled, curr_h_win, curr_w_win, curr_h_stride, curr_w_stride)
+            pred_blocks, _ = self._sliding_window_unfold(pred_scaled, h_win, w_win, h_stride, w_stride)
+            target_blocks, _ = self._sliding_window_unfold(target_scaled, h_win, w_win, h_stride, w_stride)
+#             pred_blocks, _ = self._sliding_window_unfold(pred_gray, h_win, w_win, h_stride, w_stride)
+#             target_blocks, _ = self._sliding_window_unfold(target_gray, h_win, w_win, h_stride, w_stride)
 
-#             pixel_scale_loss = self._l1_loss(pred_gray, target_gray, reduction="mean")
-            
-            w_a = 7.0
-            w_b = 4.0
-            w_c = 0.01
+            pixel_scale_loss = self._scale_loss(pred_gray, target_gray, reduction="mean")
+#             pixel_scale_loss = self._scale_loss(pred_scaled, target_scaled, reduction="mean")
+            pixel_block_loss = self._block_loss(pred_blocks, target_blocks, int(bins), scale_idx, a=a, reduction="mean")
+            scale_loss = pixel_block_loss*(1-self.b_con*self.b_weights[scale_idx]) + pixel_scale_loss*self.b_con*self.b_weights[scale_idx]
 
-            if scale > 10:
-                pixel_block_loss = self._block_loss(pred_blocks, target_blocks, int(bins), scale_idx, a=2, reduction="mean")
-                tv_loss = self._tv_loss(pred_scaled, target_scaled, reduction="mean")
-                scale_loss = w_b * pixel_block_loss + w_c*tv_loss*self.scale_tv_weight[4-scale_idx]
-            elif scale > 5:
-                tv_loss = self._tv_loss(pred_scaled, target_scaled, reduction="mean")
-                pixel_block_loss = self._block_loss(pred_blocks, target_blocks, int(bins), scale_idx, a=2, reduction="mean")
-                scale_loss = w_b * pixel_block_loss + w_c*tv_loss*self.scale_tv_weight[4-scale_idx]
-            else:
-                tv_loss = self._tv_loss(pred_scaled, target_scaled, reduction="mean")
-                pixel_scale_loss = self._scale_loss(pred_gray, target_gray, reduction="mean")
-                pixel_block_loss = self._block_loss(pred_blocks, target_blocks, int(bins), scale_idx, a=2, reduction="mean")
-                scale_loss = w_b * pixel_block_loss + w_a * pixel_scale_loss * self.scale_weights[scale_idx] + w_c*tv_loss*self.scale_tv_weight[4-scale_idx]
-
-            total_loss += scale_loss
-            
-            bins = bins / 2
+            total_loss += self.scale_weights[scale_idx]*scale_loss
+            if scale_idx%2>0:
+                bins = bins / 2
 
         if reduction == "mean":
             total_loss = total_loss.mean()
