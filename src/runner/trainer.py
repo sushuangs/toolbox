@@ -4,7 +4,8 @@ import numpy as np
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 from utils import make_optimizer, ExperimentRecorder, get_bare_model, save_network, load_network, MetricStats
-from metrics import Loss, MetricCalculator
+from metrics import MetricCalculator
+from losses import Loss
 
 class Trainer:
     def __init__(self, config, model, data, logger, save_dir):
@@ -31,16 +32,9 @@ class Trainer:
         self.model.train()
         self.TMS.reset()
 
-        train_pbar = tqdm(
-            self.train_loader, 
-            desc=f"[Train] Epoch {epoch+1}", 
-            unit="batch", 
-            colour="green",
-            leave=False
-        )
         batch_losses = []
         first_batch = True
-        for batch_idx, batch in enumerate(train_pbar):
+        for batch_idx, batch in enumerate(self.train_loader):
             lr, hr = batch[0].to(self.device), batch[1].to(self.device)
             self.optimizer.zero_grad()
             pred = self.model(lr)
@@ -51,14 +45,7 @@ class Trainer:
             
             self.TMS.update(batch_metrics)
             batch_losses.append(loss.item())
-
-            train_pbar.set_postfix({
-                "Batch Loss": f"{loss.item():.6f}",
-                "Avg Loss": f"{np.mean(batch_losses):.6f}"
-            })
             first_batch = False
-
-        train_pbar.close()
 
         mean_result = self.TMS.get_mean()
         self.recorder.record_loss_iter(epoch, 'epoch', mean_result)
@@ -109,7 +96,6 @@ class Trainer:
             if (epoch_idx+1) % self.config.val_freq == 0:
                 self._val_one_epoch(epoch_idx)
             if (epoch_idx+1) % self.config.recoder_freq == 0:
-                self.recorder.plot()
                 self.recorder.save_checkpoint()
             if (epoch_idx+1) % self.config.save_freq == 0:
                 model = get_bare_model(self.model)

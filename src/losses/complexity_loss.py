@@ -30,12 +30,6 @@ class MultiClassLoss(nn.Module):
                 "loss_weights": [1.0, 1.0],                          
             }
         ]
-#         default_configs = [
-#             {
-#                 "losses": [self._l1_loss, self._multi_scale_block_loss, self._tv_loss], 
-#                 "loss_weights": [1.0, 1.0, 0.001],                          
-#             }
-#         ]
         self.class_configs = class_configs if class_configs is not None else default_configs
         self.num_classes = len(self.class_configs)
         
@@ -279,6 +273,11 @@ class MultiClassLoss(nn.Module):
         eps = 1e-8
         B, C, h_win, w_win, num_blocks = pred.shape
         
+<<<<<<< HEAD:src/metrics/complexity_loss.py
+=======
+        block_weight = self._block_weight(target)
+        
+>>>>>>> 0f96b742323a388b3c5c5f8ffcb5e12c832dd90f:src/losses/complexity_loss.py
 #         cos_loss_per_block = self._cosine_similarity_loss(pred, target, eps=eps)
         
         pred_flat = pred.permute(0, 1, 4, 2, 3).reshape(-1, h_win * w_win)
@@ -297,8 +296,14 @@ class MultiClassLoss(nn.Module):
         
 #         total_loss_per_block = self.scale_cos_weight[scale]*cos_loss_per_block
 
+<<<<<<< HEAD:src/metrics/complexity_loss.py
         total_loss_per_block = kl_loss_per_block
 
+=======
+        total_loss_per_block = kl_loss_per_block * block_weight
+        total_loss_per_block = torch.sum(total_loss_per_block, dim=-1)
+        
+>>>>>>> 0f96b742323a388b3c5c5f8ffcb5e12c832dd90f:src/losses/complexity_loss.py
         if reduction == "mean":
             total_loss = total_loss_per_block.mean()
         elif reduction == "sum":
@@ -356,8 +361,13 @@ class MultiClassLoss(nn.Module):
 #             pred_blocks, _ = self._sliding_window_unfold(pred_gray, h_win, w_win, h_stride, w_stride)
 #             target_blocks, _ = self._sliding_window_unfold(target_gray, h_win, w_win, h_stride, w_stride)
 
+<<<<<<< HEAD:src/metrics/complexity_loss.py
             pixel_scale_loss = self._scale_loss(pred_gray, target_gray, reduction="mean")
 #             pixel_scale_loss = self._scale_loss(pred_scaled, target_scaled, reduction="mean")
+=======
+#             pixel_scale_loss = self._scale_loss(pred_gray, target_gray, reduction="mean")
+            pixel_scale_loss = self._scale_loss(pred_scaled, target_scaled, reduction="mean")
+>>>>>>> 0f96b742323a388b3c5c5f8ffcb5e12c832dd90f:src/losses/complexity_loss.py
             pixel_block_loss = self._block_loss(pred_blocks, target_blocks, int(bins), scale_idx, a=a, reduction="mean")
             scale_loss = pixel_block_loss*(1-self.b_con*self.b_weights[scale_idx]) + pixel_scale_loss*self.b_con*self.b_weights[scale_idx]
 
