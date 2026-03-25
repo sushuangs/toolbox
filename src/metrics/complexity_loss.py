@@ -27,7 +27,7 @@ class MultiClassLoss(nn.Module):
         default_configs = [
             {
                 "losses": [self._l1_loss, self._multi_scale_block_loss], 
-                "loss_weights": [1.0, 1.0],                          
+                "loss_weights": [1.0, 1.5],                          
             }
         ]
 #         default_configs = [
