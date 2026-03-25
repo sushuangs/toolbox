@@ -13,7 +13,7 @@ def init_dir(config, reset=False):
         try:
             shutil.rmtree(save_dir)
         except Exception as e:
-            raise RuntimeError(f"faile to delete：{e}") from e
+            raise RuntimeError(f"faile to delete: {e}") from e
     
     os.makedirs(save_dir, exist_ok=True)
     return save_dir
