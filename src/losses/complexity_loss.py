@@ -27,7 +27,7 @@ class MultiClassLoss(nn.Module):
         default_configs = [
             {
                 "losses": [self._l1_loss, self._multi_scale_block_loss], 
-                "loss_weights": [1.0, 1.5],                          
+                "loss_weights": [1.0, 1.0],                          
             }
         ]
         self.class_configs = class_configs if class_configs is not None else default_configs
@@ -273,13 +273,6 @@ class MultiClassLoss(nn.Module):
         eps = 1e-8
         B, C, h_win, w_win, num_blocks = pred.shape
         
-<<<<<<< HEAD:src/metrics/complexity_loss.py
-=======
-        block_weight = self._block_weight(target)
-        
->>>>>>> 0f96b742323a388b3c5c5f8ffcb5e12c832dd90f:src/losses/complexity_loss.py
-#         cos_loss_per_block = self._cosine_similarity_loss(pred, target, eps=eps)
-        
         pred_flat = pred.permute(0, 1, 4, 2, 3).reshape(-1, h_win * w_win)
         target_flat = target.permute(0, 1, 4, 2, 3).reshape(-1, h_win * w_win)
 
@@ -293,17 +286,9 @@ class MultiClassLoss(nn.Module):
         ).sum(dim=1)
 
         kl_loss_per_block = kl_loss_per_block.reshape(B, C, num_blocks)
-        
-#         total_loss_per_block = self.scale_cos_weight[scale]*cos_loss_per_block
 
-<<<<<<< HEAD:src/metrics/complexity_loss.py
         total_loss_per_block = kl_loss_per_block
 
-=======
-        total_loss_per_block = kl_loss_per_block * block_weight
-        total_loss_per_block = torch.sum(total_loss_per_block, dim=-1)
-        
->>>>>>> 0f96b742323a388b3c5c5f8ffcb5e12c832dd90f:src/losses/complexity_loss.py
         if reduction == "mean":
             total_loss = total_loss_per_block.mean()
         elif reduction == "sum":
@@ -392,7 +377,7 @@ class MultiClassLoss(nn.Module):
 
         return class_loss_total
 
-    def forward(self, pred, target):
+    def forward(self, pred, target, epoch, is_plot):
         total_loss = self._compute_class_loss(
             pred, target
         )
