@@ -13,8 +13,8 @@ class MultiClassLoss(nn.Module):
     def __init__(
         self,
         writer,
-        win_size,
-        stride,
+        win_size: Tuple[int, int] = (12, 12),
+        stride: Tuple[int, int] = (12, 12),
         class_configs: List[Dict] = None,  
     ):
         super().__init__()
@@ -37,10 +37,9 @@ class MultiClassLoss(nn.Module):
         
         self.scales = [1, 2, 4]
 
-        self.scale_weights = self._get_weight(1.50, [1,2,4], norm=True)
-#         self.scale_weights = [0.5,0.35,0.15]
-        self.b_weights = self._get_weight(2.50, [1,2,4])
-        self.b_con = 0.30
+        self.scale_weights = self._get_weight(2.00, [1,2,4], norm=True)
+        self.b_weights = self._get_weight(3.50, [1,2,4])
+        self.b_con = 0.50
 
 #         self.scale_cos_weight = self._get_weight(3.00, self.scales)
         
@@ -217,6 +216,9 @@ class MultiClassLoss(nn.Module):
             return dir_loss
 
         dir_loss = cosine_dir_loss(pred_grad_x, pred_grad_y, target_grad_x, target_grad_y)
+#         total_grad_loss = (0.8*dir_loss + 0.2*amp_loss) * target_grad_amp_weight
+#         total_grad_loss = dir_loss * target_grad_amp_weight
+#         total_grad_loss = torch.sum(total_grad_loss, dim=(2,3))
         total_grad_loss = dir_loss 
         
         if reduction == "mean":
@@ -242,7 +244,7 @@ class MultiClassLoss(nn.Module):
         cos_loss = 1 - cos_sim
         return cos_loss
     
-    def _compute_histogram_soft(self, x, bins=32, a=2, min_val=-0.50, max_val=1.50, eps=1e-8):
+    def _compute_histogram_soft(self, x, bins, a, min_val, max_val, eps):
         device = x.device
         dtype = x.dtype
         bin_width = (max_val - min_val) / bins
@@ -265,6 +267,8 @@ class MultiClassLoss(nn.Module):
         bins,
         scale,
         a,
+        min_val,
+        max_val,
         reduction: str = "none",
     ) -> torch.Tensor:
         eps = 1e-8
@@ -273,8 +277,8 @@ class MultiClassLoss(nn.Module):
         pred_flat = pred.permute(0, 1, 4, 2, 3).reshape(-1, h_win * w_win)
         target_flat = target.permute(0, 1, 4, 2, 3).reshape(-1, h_win * w_win)
 
-        pred_hist = self._compute_histogram_soft(pred_flat, bins=bins, a=a, eps=eps)
-        target_hist = self._compute_histogram_soft(target_flat, bins=bins, a=a, eps=eps)
+        pred_hist = self._compute_histogram_soft(pred_flat, bins=bins, a=a, min_val=min_val, max_val=max_val, eps=eps)
+        target_hist = self._compute_histogram_soft(target_flat, bins=bins, a=a, min_val=min_val, max_val=max_val, eps=eps)
 
         kl_loss_per_block = F.kl_div(
             torch.log(pred_hist),
@@ -284,13 +288,8 @@ class MultiClassLoss(nn.Module):
 
         kl_loss_per_block = kl_loss_per_block.reshape(B, C, num_blocks)
 
-<<<<<<< HEAD
-        total_loss_per_block = kl_loss_per_block 
-        
-=======
         total_loss_per_block = kl_loss_per_block
 
->>>>>>> ac48cfe7c3405f97e97d4027c871f7d46552a6b5
         if reduction == "mean":
             total_loss = total_loss_per_block.mean()
         elif reduction == "sum":
@@ -331,50 +330,33 @@ class MultiClassLoss(nn.Module):
         assert pred.shape == target.shape, "pred and target must have same shape"
         total_loss = 0.0
         B, C, H, W = pred.shape
-        bins = 16
+        h_win, w_win = self.win_size
+        h_stride, w_stride = self.stride
+        bins = 32
         a = 2.0
         
         for scale_idx, scale in enumerate(self.scales):
             pred_scaled = self._get_down_scale(pred, scale)
             target_scaled = self._get_down_scale(target, scale)
 
-<<<<<<< HEAD
-            pixel_scale_loss = self._scale_loss(pred_scaled, target_scaled, reduction="mean")
-            total_pixel_block_loss = 0.0
-            bins_tmp = bins
-            for win, stride in zip(self.win_size, self.stride):
-                h_win, w_win = win
-                h_stride, w_stride = stride
-                pred_blocks, _ = self._sliding_window_unfold(pred_scaled, h_win, w_win, h_stride, w_stride)
-                target_blocks, _ = self._sliding_window_unfold(target_scaled, h_win, w_win, h_stride, w_stride)
-                pixel_block_loss = self._block_loss(pred_blocks, target_blocks, int(bins_tmp), scale_idx, a=a, reduction="mean")
-                total_pixel_block_loss += pixel_block_loss
-                bins_tmp = bins_tmp / 2
-
-            scale_loss = total_pixel_block_loss*(1-self.b_con*self.b_weights[scale_idx]) + pixel_scale_loss*self.b_con*self.b_weights[scale_idx]
-=======
             pred_gray = self._rgb2gray(pred_scaled)
             target_gray = self._rgb2gray(target_scaled)
 
             pred_blocks, _ = self._sliding_window_unfold(pred_scaled, h_win, w_win, h_stride, w_stride)
             target_blocks, _ = self._sliding_window_unfold(target_scaled, h_win, w_win, h_stride, w_stride)
-#             pred_blocks, _ = self._sliding_window_unfold(pred_gray, h_win, w_win, h_stride, w_stride)
-#             target_blocks, _ = self._sliding_window_unfold(target_gray, h_win, w_win, h_stride, w_stride)
+            
+            pred_blocks_centered = pred_blocks - torch.mean(target_blocks, dim=(2,3), keepdim=True)
+            target_blocks_centered = target_blocks - torch.mean(target_blocks, dim=(2,3), keepdim=True)
+            
+            max_std = torch.max(torch.std(target_blocks, dim=(2,3)))
 
-<<<<<<< HEAD:src/metrics/complexity_loss.py
-            pixel_scale_loss = self._scale_loss(pred_gray, target_gray, reduction="mean")
-#             pixel_scale_loss = self._scale_loss(pred_scaled, target_scaled, reduction="mean")
-=======
-#             pixel_scale_loss = self._scale_loss(pred_gray, target_gray, reduction="mean")
             pixel_scale_loss = self._scale_loss(pred_scaled, target_scaled, reduction="mean")
->>>>>>> 0f96b742323a388b3c5c5f8ffcb5e12c832dd90f:src/losses/complexity_loss.py
-            pixel_block_loss = self._block_loss(pred_blocks, target_blocks, int(bins), scale_idx, a=a, reduction="mean")
+            pixel_block_loss = self._block_loss(pred_blocks_centered, target_blocks_centered, int(bins), scale_idx, a=a, min_val=-1.5*max_std, max_val=1.5*max_std, reduction="mean")
             scale_loss = pixel_block_loss*(1-self.b_con*self.b_weights[scale_idx]) + pixel_scale_loss*self.b_con*self.b_weights[scale_idx]
->>>>>>> ac48cfe7c3405f97e97d4027c871f7d46552a6b5
 
-            total_loss += self.scale_weights[scale_idx]*scale_loss
-            if scale_idx%2>0:
-                bins = bins / 2
+#             total_loss += self.scale_weights[scale_idx]*scale_loss
+            total_loss += 1.0*scale_loss
+#             bins = bins / 2
 
         if reduction == "mean":
             total_loss = total_loss.mean()
@@ -393,7 +375,7 @@ class MultiClassLoss(nn.Module):
 
         return class_loss_total
 
-    def forward(self, pred, target, epoch, is_plot):
+    def forward(self, pred, target):
         total_loss = self._compute_class_loss(
             pred, target
         )
