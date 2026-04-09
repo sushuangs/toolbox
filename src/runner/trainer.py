@@ -103,7 +103,7 @@ class Trainer:
             if current_epoch % recoder_freq == 0:
                 self.recorder.save_checkpoint()
             if current_epoch % save_freq == 0:
-                model.save()   
+                self.model.save()   
             epoch_pbar.set_postfix({
                 "Epoch": f"{current_epoch}/{self.total_epoch}",
                 "Progress": f"{(current_epoch)/self.total_epoch*100:.1f}%"

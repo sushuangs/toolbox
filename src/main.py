@@ -30,7 +30,7 @@ def main(args):
 
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument('--config', type=str, default='./configs/swinir/SwinIR_x2_DIV2K_L1.yaml')
+parser.add_argument('--config', type=str, default='./configs/swinir/SwinIR_x4_DIV2K_L1.yaml')
 parser.add_argument('--reset', action='store_true', default=False)
 args = parser.parse_args()
 main(args)
