@@ -34,7 +34,7 @@ def main(args):
 
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument('--config', type=str, default='./configs/edsr/edsr_x2_DIV2K_CML_L1+msbl_(8,8)_(1,1)_scale3_std_v1.2.0.yaml')
+parser.add_argument('--config', type=str, default='./configs/swinir/SwinIR_x2_DIV2K_L1.yaml')
 parser.add_argument('--reset', action='store_true', default=False)
 args = parser.parse_args()
 main(args)

@@ -4,6 +4,7 @@ import time
 import torch
 import torch.nn as nn
 import torch.nn.parallel as P
+from torch.nn import functional as F
 
 class Model(nn.Module):
     def __init__(self, args, logger):
@@ -12,8 +13,14 @@ class Model(nn.Module):
 
         self.self_ensemble = args.self_ensemble
         self.precision = args.precision
+        self.type = args.model.lower()
         self.cpu = args.cpu
         self.logger = logger
+
+        if self.type.find('swinir') >= 0:
+            self.window_size = args.network_g.window_size
+            self.scale = args.scale
+        
         if self.cpu:
             self.device = torch.device('cpu')
         else:
@@ -36,10 +43,26 @@ class Model(nn.Module):
             else:
                 return self.model(x)
         else:
-            if self.self_ensemble:
-                return self.forward_x8(x, forward_function=self.model.forward)
+            if self.type.find('swinir') >= 0:
+                mod_pad_h, mod_pad_w = 0, 0
+                _, _, h, w = x.size()
+                if h % self.window_size != 0:
+                    mod_pad_h = self.window_size - h % self.window_size
+                if w % self.window_size != 0:
+                    mod_pad_w = self.window_size - w % self.window_size
+                img = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), 'reflect')
+                if self.self_ensemble:
+                    output = self.forward_x8(img, forward_function=self.model.forward)
+                else:
+                    output = self.model(img)
+                _, _, h, w = output.size()
+                output = output[:, :, 0:h - mod_pad_h * self.scale, 0:w - mod_pad_w * self.scale]
+                return output
             else:
-                return self.model(x)
+                if self.self_ensemble:
+                    return self.forward_x8(x, forward_function=self.model.forward)
+                else:
+                    return self.model(x)
 
     def forward_x8(self, *args, forward_function=None):
         def _transform(v, op):

@@ -30,7 +30,7 @@ class Data:
 
         self.loader_test = []
         for d in config.data_test:
-            if d in ['Set5', 'Set14', 'B100', 'Urban100']:
+            if d in ['Set5', 'Set14', 'B100', 'Urban100', 'Manga109']:
                 m = import_module('data.benchmark')
                 testset = getattr(m, 'Benchmark')(config, train=False, name=d)
             else:

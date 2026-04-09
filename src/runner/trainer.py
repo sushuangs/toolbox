@@ -42,6 +42,7 @@ class Trainer:
             
             loss.backward()
             self.optimizer.step()
+            self.optimizer.schedule()
             
             self.TMS.update(batch_metrics)
             batch_losses.append(loss.item())
@@ -81,6 +82,19 @@ class Trainer:
                 self.recorder.record_metric_iter(epoch, 'epoch', dataset_name, mean_result)
 
         self.logger.info(f"{'='*20} EPOCH {epoch+1} - VALIDATION DONE {'='*20}\n")
+        
+    def _get_stage_freq(self, current_epoch, stage_freq_list):
+        """
+        分段获取当前Epoch对应的保存/验证频率
+        :param current_epoch: 当前实际轮数 (从1开始)
+        :param stage_freq_list: 分段配置 [(截止Epoch, 频率), ...]
+        :return: 当前阶段的频率
+        """
+        for end_epoch, freq in stage_freq_list:
+            if current_epoch <= end_epoch:
+                return freq
+
+        return stage_freq_list[-1][1]
 
     def run(self):
         epoch_pbar = tqdm(
@@ -92,18 +106,24 @@ class Trainer:
         for epoch_idx in epoch_pbar:
             self.data.set_epoch(epoch_idx)
             self._train_one_epoch(epoch_idx)
-            self.optimizer.schedule()
-            if (epoch_idx+1) % self.config.val_freq == 0:
+            
+            current_epoch = epoch_idx + 1
+
+            val_freq = self._get_stage_freq(current_epoch, self.config.val_freq)
+            recoder_freq = self._get_stage_freq(current_epoch, self.config.recoder_freq)
+            save_freq = self._get_stage_freq(current_epoch, self.config.save_freq)
+
+            if current_epoch % val_freq == 0:
                 self._val_one_epoch(epoch_idx)
-            if (epoch_idx+1) % self.config.recoder_freq == 0:
+            if current_epoch % recoder_freq == 0:
                 self.recorder.save_checkpoint()
-            if (epoch_idx+1) % self.config.save_freq == 0:
+            if current_epoch % save_freq == 0:
                 model = get_bare_model(self.model)
                 save_network(model, self.config.exp_name, epoch_idx, self.logger, self.save_dir)
                 self.optimizer.save(self.save_dir, epoch_idx)
             epoch_pbar.set_postfix({
-                "Epoch": f"{epoch_idx+1}/{self.total_epoch}",
-                "Progress": f"{(epoch_idx+1)/self.total_epoch*100:.1f}%"
+                "Epoch": f"{current_epoch}/{self.total_epoch}",
+                "Progress": f"{(current_epoch)/self.total_epoch*100:.1f}%"
             })
         self.recorder.finish()
         epoch_pbar.close()
