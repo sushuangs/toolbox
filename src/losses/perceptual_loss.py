@@ -115,7 +115,7 @@ class PerceptualLoss(nn.Module):
         else:
             style_loss = None
 
-        return style_loss
+        return percep_loss
 
     def _gram_mat(self, x):
         """Calculate Gram matrix.
