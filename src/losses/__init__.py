@@ -12,7 +12,7 @@ import lpips
 
 
 class Loss(nn.modules.loss._Loss):
-    def __init__(self, args, writer):
+    def __init__(self, args):
         super(Loss, self).__init__()
         print('Preparing loss function:')
 
@@ -42,7 +42,6 @@ class Loss(nn.modules.loss._Loss):
             elif loss_type.find('CML') >= 0:
                 module = import_module('losses.complexity_loss')
                 loss_function = getattr(module, 'MultiClassLoss')(
-                    writer,
                     **namespace_to_dict(loss.params)
                 )
             elif loss_type.find('PLC') >= 0:

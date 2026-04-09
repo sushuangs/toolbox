@@ -1,8 +1,6 @@
 import os
 import shutil
 from utils import load_config, get_logger, set_seed
-from data import Data
-from models import Model
 from runner import Trainer
 
 def init_dir(config, reset=False):
@@ -26,9 +24,7 @@ def main(args):
         log_dir=save_dir,
     )
     set_seed(config.manual_seed)
-    data = Data(config)
-    model = Model(config, logger)
-    trainer = Trainer(config, model, data, logger, save_dir)
+    trainer = Trainer(config, logger, save_dir)
     trainer.run()
 
 
