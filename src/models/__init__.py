@@ -156,8 +156,8 @@ class Model():
         return y
 
     def save(self, exp_name, epoch_idx, logger, save_dir):
-        if hasattr(self, 'net_g_ema'):
-            save_network([self.net_g, self.net_g_ema], exp_name, epoch_idx, logger, save_dir, param_key=['params', 'params_ema'])
+        if hasattr(self, 'network_g_ema'):
+            save_network([self.network_g, self.network_g_ema], exp_name, epoch_idx, logger, save_dir, param_key=['params', 'params_ema'])
         else:
-            save_network(self.net_g, 'net_g', current_iter)
-        self.optimizer.save(self.save_dir, epoch_idx)
+            save_network(self.network_g, exp_name, epoch_idx, logger, save_dir)
+        self.optimizer.save(save_dir, epoch_idx)

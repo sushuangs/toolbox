@@ -1,142 +1,170 @@
-## ECCV-2018-Image Super-Resolution Using Very Deep Residual Channel Attention Networks
-## https://arxiv.org/abs/1807.02758
-from model import common
+import math
+import torch
+from torch import nn as nn
+from utils.config import namespace_to_dict
 
-import torch.nn as nn
+def make_model(args, parent=False):
+    return RCAN(**namespace_to_dict(args))
 
-def make_model(config, parent=False):
-    return RCAN(config)
+def make_layer(basic_block, num_basic_block, **kwarg):
+    """Make layers by stacking the same blocks.
 
-## Channel Attention (CA) Layer
-class CALayer(nn.Module):
-    def __init__(self, channel, reduction=16):
-        super(CALayer, self).__init__()
-        # global average pooling: feature --> point
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        # feature channel downscale and upscale --> channel weight
-        self.conv_du = nn.Sequential(
-                nn.Conv2d(channel, channel // reduction, 1, padding=0, bias=True),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(channel // reduction, channel, 1, padding=0, bias=True),
-                nn.Sigmoid()
-        )
+    Args:
+        basic_block (nn.module): nn.module class for basic block.
+        num_basic_block (int): number of blocks.
+
+    Returns:
+        nn.Sequential: Stacked blocks in nn.Sequential.
+    """
+    layers = []
+    for _ in range(num_basic_block):
+        layers.append(basic_block(**kwarg))
+    return nn.Sequential(*layers)
+
+class Upsample(nn.Sequential):
+    """Upsample module.
+
+    Args:
+        scale (int): Scale factor. Supported scales: 2^n and 3.
+        num_feat (int): Channel number of intermediate features.
+    """
+
+    def __init__(self, scale, num_feat):
+        m = []
+        if (scale & (scale - 1)) == 0:  # scale = 2^n
+            for _ in range(int(math.log(scale, 2))):
+                m.append(nn.Conv2d(num_feat, 4 * num_feat, 3, 1, 1))
+                m.append(nn.PixelShuffle(2))
+        elif scale == 3:
+            m.append(nn.Conv2d(num_feat, 9 * num_feat, 3, 1, 1))
+            m.append(nn.PixelShuffle(3))
+        else:
+            raise ValueError(f'scale {scale} is not supported. Supported scales: 2^n and 3.')
+        super(Upsample, self).__init__(*m)
+class ChannelAttention(nn.Module):
+    """Channel attention used in RCAN.
+
+    Args:
+        num_feat (int): Channel number of intermediate features.
+        squeeze_factor (int): Channel squeeze factor. Default: 16.
+    """
+
+    def __init__(self, num_feat, squeeze_factor=16):
+        super(ChannelAttention, self).__init__()
+        self.attention = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1), nn.Conv2d(num_feat, num_feat // squeeze_factor, 1, padding=0),
+            nn.ReLU(inplace=True), nn.Conv2d(num_feat // squeeze_factor, num_feat, 1, padding=0), nn.Sigmoid())
 
     def forward(self, x):
-        y = self.avg_pool(x)
-        y = self.conv_du(y)
+        y = self.attention(x)
         return x * y
 
-## Residual Channel Attention Block (RCAB)
-class RCAB(nn.Module):
-    def __init__(
-        self, conv, n_feat, kernel_size, reduction,
-        bias=True, bn=False, act=nn.ReLU(True), res_scale=1):
 
+class RCAB(nn.Module):
+    """Residual Channel Attention Block (RCAB) used in RCAN.
+
+    Args:
+        num_feat (int): Channel number of intermediate features.
+        squeeze_factor (int): Channel squeeze factor. Default: 16.
+        res_scale (float): Scale the residual. Default: 1.
+    """
+
+    def __init__(self, num_feat, squeeze_factor=16, res_scale=1):
         super(RCAB, self).__init__()
-        modules_body = []
-        for i in range(2):
-            modules_body.append(conv(n_feat, n_feat, kernel_size, bias=bias))
-            if bn: modules_body.append(nn.BatchNorm2d(n_feat))
-            if i == 0: modules_body.append(act)
-        modules_body.append(CALayer(n_feat, reduction))
-        self.body = nn.Sequential(*modules_body)
         self.res_scale = res_scale
 
-    def forward(self, x):
-        res = self.body(x)
-        #res = self.body(x).mul(self.res_scale)
-        res += x
-        return res
+        self.rcab = nn.Sequential(
+            nn.Conv2d(num_feat, num_feat, 3, 1, 1), nn.ReLU(True), nn.Conv2d(num_feat, num_feat, 3, 1, 1),
+            ChannelAttention(num_feat, squeeze_factor))
 
-## Residual Group (RG)
+    def forward(self, x):
+        res = self.rcab(x) * self.res_scale
+        return res + x
+
+
 class ResidualGroup(nn.Module):
-    def __init__(self, conv, n_feat, kernel_size, reduction, act, res_scale, n_resblocks):
+    """Residual Group of RCAB.
+
+    Args:
+        num_feat (int): Channel number of intermediate features.
+        num_block (int): Block number in the body network.
+        squeeze_factor (int): Channel squeeze factor. Default: 16.
+        res_scale (float): Scale the residual. Default: 1.
+    """
+
+    def __init__(self, num_feat, num_block, squeeze_factor=16, res_scale=1):
         super(ResidualGroup, self).__init__()
-        modules_body = []
-        modules_body = [
-            RCAB(
-                conv, n_feat, kernel_size, reduction, bias=True, bn=False, act=nn.ReLU(True), res_scale=1) \
-            for _ in range(n_resblocks)]
-        modules_body.append(conv(n_feat, n_feat, kernel_size))
-        self.body = nn.Sequential(*modules_body)
+
+        self.residual_group = make_layer(
+            RCAB, num_block, num_feat=num_feat, squeeze_factor=squeeze_factor, res_scale=res_scale)
+        self.conv = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
 
     def forward(self, x):
-        res = self.body(x)
-        res += x
-        return res
+        res = self.conv(self.residual_group(x))
+        return res + x
 
-## Residual Channel Attention Network (RCAN)
+
 class RCAN(nn.Module):
-    def __init__(self, config, conv=common.default_conv):
+    """Residual Channel Attention Networks.
+
+    ``Paper: Image Super-Resolution Using Very Deep Residual Channel Attention Networks``
+
+    Reference: https://github.com/yulunzhang/RCAN
+
+    Args:
+        num_in_ch (int): Channel number of inputs.
+        num_out_ch (int): Channel number of outputs.
+        num_feat (int): Channel number of intermediate features.
+            Default: 64.
+        num_group (int): Number of ResidualGroup. Default: 10.
+        num_block (int): Number of RCAB in ResidualGroup. Default: 16.
+        squeeze_factor (int): Channel squeeze factor. Default: 16.
+        upscale (int): Upsampling factor. Support 2^n and 3.
+            Default: 4.
+        res_scale (float): Used to scale the residual in residual block.
+            Default: 1.
+        img_range (float): Image range. Default: 255.
+        rgb_mean (tuple[float]): Image mean in RGB orders.
+            Default: (0.4488, 0.4371, 0.4040), calculated from DIV2K dataset.
+    """
+
+    def __init__(self,
+                 num_in_ch,
+                 num_out_ch,
+                 num_feat=64,
+                 num_group=10,
+                 num_block=16,
+                 squeeze_factor=16,
+                 upscale=4,
+                 res_scale=1,
+                 img_range=255.,
+                 rgb_mean=(0.4488, 0.4371, 0.4040)):
         super(RCAN, self).__init__()
-        
-        n_resgroups = config.n_resgroups
-        n_resblocks = config.n_resblocks
-        n_feats = config.n_feats
-        kernel_size = 3
-        reduction = config.reduction 
-        scale = config.scale[0]
-        act = nn.ReLU(True)
-        
-        # RGB mean for DIV2K
-        self.sub_mean = common.MeanShift(config.rgb_range)
-        
-        # define head module
-        modules_head = [conv(config.n_colors, n_feats, kernel_size)]
 
-        # define body module
-        modules_body = [
-            ResidualGroup(
-                conv, n_feats, kernel_size, reduction, act=act, res_scale=config.res_scale, n_resblocks=n_resblocks) \
-            for _ in range(n_resgroups)]
+        self.img_range = img_range
+        self.mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
 
-        modules_body.append(conv(n_feats, n_feats, kernel_size))
-
-        # define tail module
-        modules_tail = [
-            common.Upsampler(conv, scale, n_feats, act=False),
-            conv(n_feats, config.n_colors, kernel_size)]
-
-        self.add_mean = common.MeanShift(config.rgb_range, sign=1)
-
-        self.head = nn.Sequential(*modules_head)
-        self.body = nn.Sequential(*modules_body)
-        self.tail = nn.Sequential(*modules_tail)
+        self.conv_first = nn.Conv2d(num_in_ch, num_feat, 3, 1, 1)
+        self.body = make_layer(
+            ResidualGroup,
+            num_group,
+            num_feat=num_feat,
+            num_block=num_block,
+            squeeze_factor=squeeze_factor,
+            res_scale=res_scale)
+        self.conv_after_body = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
+        self.upsample = Upsample(upscale, num_feat)
+        self.conv_last = nn.Conv2d(num_feat, num_out_ch, 3, 1, 1)
 
     def forward(self, x):
-        x = self.sub_mean(x)
-        x = self.head(x)
+        self.mean = self.mean.type_as(x)
 
-        res = self.body(x)
+        x = (x - self.mean) * self.img_range
+        x = self.conv_first(x)
+        res = self.conv_after_body(self.body(x))
         res += x
 
-        x = self.tail(res)
-        x = self.add_mean(x)
+        x = self.conv_last(self.upsample(res))
+        x = x / self.img_range + self.mean
 
-        return x 
-
-    def load_state_dict(self, state_dict, strict=False):
-        own_state = self.state_dict()
-        for name, param in state_dict.items():
-            if name in own_state:
-                if isinstance(param, nn.Parameter):
-                    param = param.data
-                try:
-                    own_state[name].copy_(param)
-                except Exception:
-                    if name.find('tail') >= 0:
-                        print('Replace pre-trained upsampler to new one...')
-                    else:
-                        raise RuntimeError('While copying the parameter named {}, '
-                                           'whose dimensions in the model are {} and '
-                                           'whose dimensions in the checkpoint are {}.'
-                                           .format(name, own_state[name].size(), param.size()))
-            elif strict:
-                if name.find('tail') == -1:
-                    raise KeyError('unexpected key "{}" in state_dict'
-                                   .format(name))
-
-        if strict:
-            missing = set(own_state.keys()) - set(state_dict.keys())
-            if len(missing) > 0:
-                raise KeyError('missing keys in state_dict: "{}"'.format(missing))
+        return x

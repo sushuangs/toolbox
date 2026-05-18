@@ -30,7 +30,7 @@ def main(args):
 
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument('--config', type=str, default='./configs/edsr/EDSR_x2_DIV2K_PL.yaml')
+parser.add_argument('--config', type=str, default='./configs/edsr/edsr_x2_DIV2K_SML.yaml')
 parser.add_argument('--reset', action='store_true', default=False)
 args = parser.parse_args()
 main(args)
